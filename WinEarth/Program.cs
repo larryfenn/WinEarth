@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -10,6 +11,7 @@ namespace WinEarth
 {
     class Program
     {
+        private static string storagePath = @"C:\Users\larry\Downloads\Desktop\WinEarth";
         static void Main(string[] args)
         {
             Wallpaper[] screens = { new Wallpaper(2), new Wallpaper(0), new Wallpaper(1) }; // order comes from the monitor order in Displays
@@ -19,43 +21,37 @@ namespace WinEarth
                     "https://www.star.nesdis.noaa.gov/GOES/sector.php?sat=G16&sector=eus",
                     "https://www.star.nesdis.noaa.gov/GOES/sector.php?sat=G16&sector=ne"
             };
+            string[] filenames = { "left.png", "center.png", "right.png" };
+            List<Task> tasks = new List<Task>();
             while (true)
             {
-                string[] image_urls = new string[3];
                 for (int i = 0; i < 3; i++)
                 {
-                    var response = CallUrl(page_urls[i]).Result;
-                    image_urls[i] = getImageUrl(response);
+                    tasks.Add(DownloadImageFileAsync(page_urls[i], Path.Combine(storagePath, filenames[i]), screens[i]));
                 }
-
-                string[] filenames = { "left.png", "center.png", "right.png" };
-                string storagePath = @"C:\Users\larry\Downloads\Desktop\WinEarth";
-
-                using (var client = new WebClient())
-                {
-                    for (int i = 0; i < 3; i++)
-                    {
-                        string storageFilename = filenames[i];
-                        string picFilename = Path.Combine(storagePath, storageFilename);
-                        client.DownloadFile(image_urls[i], picFilename); // TODO: handle HTTP errors
-                        screens[i].Set(picFilename);
-                    }
-                }
+                Task.WhenAll(tasks);
                 Thread.Sleep(300000);
             }
         }
-
-        private static async Task<string> CallUrl(string fullUrl)
+        private static async Task DownloadImageFileAsync(string fullUrl, string filePath, Wallpaper screen)
         {
-            HttpClient client = new HttpClient();
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            client.DefaultRequestHeaders.Accept.Clear();
-            var response = client.GetStringAsync(fullUrl);
-            return await response;
+            string imageUrl;
+            using (HttpClient client = new HttpClient())
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                client.DefaultRequestHeaders.Accept.Clear();
+                var response = client.GetStringAsync(fullUrl);
+                imageUrl = GetImageUrl(await response);
+            }
 
+            using (var client = new WebClient())
+            {
+                await client.DownloadFileTaskAsync(imageUrl, filePath);
+            }
+
+            screen.Set(filePath);
         }
-
-        private static string getImageUrl(string html)
+        private static string GetImageUrl(string html)
         {
             HtmlDocument htmlDoc = new HtmlDocument();
             htmlDoc.LoadHtml(html);
