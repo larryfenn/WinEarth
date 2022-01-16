@@ -29,7 +29,7 @@ namespace WinEarth
                 }
 
                 string[] filenames = { "left.png", "center.png", "right.png" };
-                string storagePath = @"C:\Users\larry\Downloads\Desktop\EarthView";
+                string storagePath = @"C:\Users\larry\Downloads\Desktop\WinEarth";
 
                 using (var client = new WebClient())
                 {
