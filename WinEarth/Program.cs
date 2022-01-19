@@ -13,12 +13,9 @@ namespace WinEarth
     class Program
     {
         private static string storagePath = @"C:\Users\larry\Downloads\Desktop\WinEarth";
-        private static HttpClient pageScrapeClient = new HttpClient();
 
         static void Main(string[] args)
         {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            pageScrapeClient.DefaultRequestHeaders.Accept.Clear();
             Wallpaper[] screens = { new Wallpaper(2), new Wallpaper(0), new Wallpaper(1) }; // order comes from the monitor order in Displays
             WebClient[] clients = { new WebClient(), new WebClient(), new WebClient() };
             Uri[] page_urls =
