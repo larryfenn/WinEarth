@@ -21,7 +21,6 @@
         public void Set(string file)
         {
             wallpaper.SetWallpaper(monitor, file);
-
         }
     }
 }
