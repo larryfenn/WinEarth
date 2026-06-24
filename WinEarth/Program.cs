@@ -49,9 +49,9 @@ namespace WinEarth
             WebClient[] clients = { new WebClient(), new WebClient(), new WebClient() };
             string[] filenames = { "left.png", "center.png", "right.png" };
             Rectangle[] crops = { new Rectangle(2600, 94, 2400, 1350), new Rectangle(0, 132, 3317, 1866), new Rectangle(0, 0, 4676, 2630) };
-            List<Task> tasks = new List<Task>();
             while (true)
             {
+                List<Task> tasks = new List<Task>();
                 // string[] meso_pages = GetMesoscaleUrl(clients[0]);
                 Uri[] page_urls = {
                     new Uri("https://www.star.nesdis.noaa.gov/goes/conus.php?sat=G18"),
@@ -69,9 +69,18 @@ namespace WinEarth
                 {
                     Task.WhenAll(tasks).Wait();
                 }
+                catch (AggregateException ae)
+                {
+                    // Per-task failures are already logged inside DownloadImageFileAsync;
+                    // this is a safety net for anything that still escapes.
+                    foreach (Exception e in ae.Flatten().InnerExceptions)
+                    {
+                        Log("Update cycle error|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
+                    }
+                }
                 catch (Exception e)
                 {
-                    
+                    Log("Update cycle error|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
                 }
                 Thread.Sleep(300000);
             }
