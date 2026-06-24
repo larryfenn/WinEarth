@@ -21,9 +21,19 @@ namespace WinEarth
         // a single instance handles all concurrent downloads.
         private static readonly HttpClient httpClient = new HttpClient();
 
+        [STAThread]
         static void Main(string[] args)
         {
             config = Config.Load();
+
+            // Config mode opens the GUI instead of running the updater loop. It is a
+            // separate concern from the background updater, so it skips the single-
+            // instance mutex and can run alongside a running updater.
+            if (args != null && args.Any(a => string.Equals(a, "--config", StringComparison.OrdinalIgnoreCase)))
+            {
+                ShowConfig();
+                return;
+            }
 
             // Enforce a single running instance. The mutex name is prefixed with "Global\"
             // so the check spans all user sessions on the machine.
@@ -37,6 +47,14 @@ namespace WinEarth
                 }
                 Run();
             }
+        }
+
+        /// <summary>Launches the configuration GUI and blocks until it is closed.</summary>
+        private static void ShowConfig()
+        {
+            System.Windows.Forms.Application.EnableVisualStyles();
+            System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+            System.Windows.Forms.Application.Run(new ConfigForm(config));
         }
 
         /// <summary>Appends a timestamped line to the configured log file.</summary>
