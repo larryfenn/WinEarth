@@ -14,10 +14,12 @@ namespace WinEarth
 {
     static class Program
     {
-        private static string storagePath = @"C:\Users\larry\Downloads\Desktop\WinEarth";
+        private static Config config;
 
         static void Main(string[] args)
         {
+            config = Config.Load();
+
             // Enforce a single running instance. The mutex name is prefixed with "Global\"
             // so the check spans all user sessions on the machine.
             bool createdNew;
@@ -25,13 +27,19 @@ namespace WinEarth
             {
                 if (!createdNew)
                 {
-                    using (StreamWriter sw = File.AppendText(@"C:\Users\larry\corelog.txt"))
-                    {
-                        sw.WriteLine(DateTime.Now + "|Another instance of WinEarth is already running. Exiting.");
-                    }
+                    Log("Another instance of WinEarth is already running. Exiting.");
                     return;
                 }
                 Run();
+            }
+        }
+
+        /// <summary>Appends a timestamped line to the configured log file.</summary>
+        private static void Log(string message)
+        {
+            using (StreamWriter sw = File.AppendText(config.LogPath))
+            {
+                sw.WriteLine(DateTime.Now + "|" + message);
             }
         }
 
@@ -70,7 +78,7 @@ namespace WinEarth
         }
         private static async Task DownloadImageFileAsync(int task_id, Uri fullUrl, int index, string filename, Rectangle crop, Wallpaper screen, WebClient client)
         {
-            string filePath = Path.Combine(storagePath, filename);
+            string filePath = Path.Combine(config.StoragePath, filename);
             bool success = false;
             int retries = 0;
             while (!success & retries < 3)
@@ -86,18 +94,12 @@ namespace WinEarth
                 catch (Exception e)
                 {
                     retries++;
-                    using (StreamWriter sw = File.AppendText(@"C:\Users\larry\corelog.txt"))
-                    {
-                        sw.WriteLine(DateTime.Now + "|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
-                    }
+                    Log(e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
                 }
             }
             if (!success)
             {
-                using (StreamWriter sw = File.AppendText(@"C:\Users\larry\corelog.txt"))
-                {
-                    sw.WriteLine("Failed to update!");
-                }
+                Log("Failed to update!");
             }
         }
         private static string GetImageUrl(string html, int index)
