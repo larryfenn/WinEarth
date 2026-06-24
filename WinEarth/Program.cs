@@ -18,6 +18,25 @@ namespace WinEarth
 
         static void Main(string[] args)
         {
+            // Enforce a single running instance. The mutex name is prefixed with "Global\"
+            // so the check spans all user sessions on the machine.
+            bool createdNew;
+            using (Mutex instanceMutex = new Mutex(true, @"Global\WinEarth-SingleInstance", out createdNew))
+            {
+                if (!createdNew)
+                {
+                    using (StreamWriter sw = File.AppendText(@"C:\Users\larry\corelog.txt"))
+                    {
+                        sw.WriteLine(DateTime.Now + "|Another instance of WinEarth is already running. Exiting.");
+                    }
+                    return;
+                }
+                Run();
+            }
+        }
+
+        private static void Run()
+        {
             Wallpaper[] screens = { new Wallpaper(1), new Wallpaper(2), new Wallpaper(0) }; // order comes from the monitor order in Displays
             WebClient[] clients = { new WebClient(), new WebClient(), new WebClient() };
             string[] filenames = { "left.png", "center.png", "right.png" };
