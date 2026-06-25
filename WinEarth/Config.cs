@@ -69,21 +69,53 @@ namespace WinEarth
 
     /// <summary>
     /// Runtime configuration for WinEarth, loaded from a JSON file next to the
-    /// executable. New settings can be added as properties here and to config.json.
+    /// executable. The only persisted setting is the per-desktop <see cref="Sources"/>
+    /// list; all file locations are fixed relative to the executable so the install is
+    /// self-contained.
     /// </summary>
     public class Config
     {
-        /// <summary>Directory where downloaded/cropped wallpaper images are written.</summary>
-        public string StoragePath { get; set; } = @"C:\Users\larry\Downloads\Desktop\WinEarth";
-
-        /// <summary>File that errors and status messages are appended to.</summary>
-        public string LogPath { get; set; } = @"C:\Users\larry\corelog.txt";
-
         /// <summary>Per-desktop image source and crop settings chosen in the GUI.</summary>
         public List<DesktopSource> Sources { get; set; } = new List<DesktopSource>();
 
         /// <summary>Default name of the config file, expected next to the executable.</summary>
         private const string FileName = "config.json";
+
+        /// <summary>Directory the executable runs from; all WinEarth files live here.</summary>
+        private static string AppDirectory
+        {
+            get { return Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); }
+        }
+
+        /// <summary>Full path of the config file, fixed alongside the executable.</summary>
+        private static string ConfigFilePath
+        {
+            get { return Path.Combine(AppDirectory, FileName); }
+        }
+
+        /// <summary>
+        /// Directory where downloaded/cropped wallpaper images are written. Fixed to a
+        /// subfolder next to the executable; not user-configurable.
+        /// </summary>
+        public static string StoragePath
+        {
+            get { return Path.Combine(AppDirectory, "wallpapers"); }
+        }
+
+        /// <summary>
+        /// File that errors and status messages are appended to. Fixed alongside the
+        /// executable; not user-configurable.
+        /// </summary>
+        public static string LogPath
+        {
+            get { return Path.Combine(AppDirectory, "corelog.txt"); }
+        }
+
+        /// <summary>True if a config.json already exists next to the executable.</summary>
+        public static bool Exists()
+        {
+            return File.Exists(ConfigFilePath);
+        }
 
         /// <summary>
         /// Loads configuration from config.json next to the executable. If the file is
@@ -92,15 +124,13 @@ namespace WinEarth
         /// </summary>
         public static Config Load()
         {
-            string path = Path.Combine(
-                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-                FileName);
+            EnsureDirectories();
 
-            if (File.Exists(path))
+            if (File.Exists(ConfigFilePath))
             {
                 try
                 {
-                    string json = File.ReadAllText(path);
+                    string json = File.ReadAllText(ConfigFilePath);
                     Config loaded = new JavaScriptSerializer().Deserialize<Config>(json);
                     if (loaded != null)
                     {
@@ -116,13 +146,31 @@ namespace WinEarth
             Config defaults = new Config();
             try
             {
-                defaults.Save(path);
+                defaults.Save();
             }
             catch
             {
                 // If we can't write the file, just run with in-memory defaults.
             }
             return defaults;
+        }
+
+        /// <summary>
+        /// Creates the <see cref="StoragePath"/> subfolder if it doesn't already exist, so
+        /// the first download doesn't fail. <see cref="LogPath"/> sits directly in the
+        /// (already-existing) executable directory. Failures are swallowed; the subsequent
+        /// write will surface them.
+        /// </summary>
+        private static void EnsureDirectories()
+        {
+            try
+            {
+                Directory.CreateDirectory(StoragePath);
+            }
+            catch
+            {
+                // Ignore; the actual write will report a meaningful error.
+            }
         }
 
         /// <summary>Returns the configured source for a monitor, or null if none is set.</summary>
@@ -147,16 +195,8 @@ namespace WinEarth
         /// <summary>Persists the config to config.json next to the executable.</summary>
         public void Save()
         {
-            string path = Path.Combine(
-                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-                FileName);
-            Save(path);
-        }
-
-        private void Save(string path)
-        {
             string json = new JavaScriptSerializer().Serialize(this);
-            File.WriteAllText(path, json);
+            File.WriteAllText(ConfigFilePath, json);
         }
     }
 }

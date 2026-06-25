@@ -13,27 +13,6 @@ namespace WinEarth
     }
 
     /// <summary>
-    /// This enumeration is used to set and get slideshow options.
-    /// </summary> 
-    public enum DesktopSlideshowOptions
-    {
-        // When set, indicates that the order in which images in the slideshow are displayed can be randomized.
-        ShuffleImages = 0x01,
-    }
-
-
-    /// <summary>
-    /// This enumeration is used by GetStatus to indicate the current status of the slideshow.
-    /// </summary>
-    public enum DesktopSlideshowState
-    {
-        Enabled = 0x01,
-        Slideshow = 0x02,
-        DisabledByRemoteSession = 0x04,
-    }
-
-
-    /// <summary>
     /// This enumeration is used by the AdvanceSlideshow method to indicate whether to advance the slideshow forward or backward.
     /// </summary>
     public enum DesktopSlideshowDirection

@@ -15,19 +15,24 @@ namespace WinEarth
     {
         private static Config config;
 
-        // HttpClient is thread-safe and intended to be shared for the life of the app;
-        // a single instance handles all concurrent downloads.
-        private static readonly HttpClient httpClient = new HttpClient();
+        // Serializes log writes: downloads run concurrently and File.AppendText opens
+        // the log with exclusive access, so concurrent writers would throw IOException.
+        private static readonly object logLock = new object();
 
         [STAThread]
         static void Main(string[] args)
         {
+            // Check before Load(), which writes a defaults file when one is missing.
+            bool firstRun = !Config.Exists();
             config = Config.Load();
 
             // Config mode opens the GUI instead of running the updater loop. It is a
             // separate concern from the background updater, so it skips the single-
-            // instance mutex and can run alongside a running updater.
-            if (args != null && args.Any(a => string.Equals(a, "--config", StringComparison.OrdinalIgnoreCase)))
+            // instance mutex and can run alongside a running updater. We also open it
+            // automatically on a fresh install (no config.json yet) so the user lands in
+            // setup instead of an updater loop with nothing configured.
+            bool configRequested = args != null && args.Any(a => string.Equals(a, "--config", StringComparison.OrdinalIgnoreCase));
+            if (configRequested || firstRun)
             {
                 bool launchRequested = ShowConfig();
 
@@ -96,9 +101,12 @@ namespace WinEarth
         /// <summary>Appends a timestamped line to the configured log file.</summary>
         private static void Log(string message)
         {
-            using (StreamWriter sw = File.AppendText(config.LogPath))
+            lock (logLock)
             {
-                sw.WriteLine(DateTime.Now + "|" + message);
+                using (StreamWriter sw = File.AppendText(Config.LogPath))
+                {
+                    sw.WriteLine(DateTime.Now + "|" + message);
+                }
             }
         }
 
@@ -192,10 +200,10 @@ namespace WinEarth
         }
         private static async Task DownloadImageFileAsync(DesktopSource source, string filename, Rectangle crop, Wallpaper screen)
         {
-            string filePath = Path.Combine(config.StoragePath, filename);
+            string filePath = Path.Combine(Config.StoragePath, filename);
             bool success = false;
             int retries = 0;
-            while (!success & retries < 3)
+            while (!success && retries < 3)
             {
                 try
                 {
@@ -203,7 +211,7 @@ namespace WinEarth
                     // reading NOAA's mesoscale list is retried like any other hiccup.
                     Uri pageUrl = await ResolvePageUrlAsync(source);
                     // Resolve the scraped href against the page so relative links work too.
-                    string imageUrl = new Uri(pageUrl, GetImageUrl(await httpClient.GetStringAsync(pageUrl), source.ItemIndex)).ToString();
+                    string imageUrl = new Uri(pageUrl, GoesImage.ExtractImageUrl(await GoesImage.HttpClient.GetStringAsync(pageUrl), source.ItemIndex)).ToString();
                     await DownloadFileAsync(imageUrl, filePath);
                     Crop(filePath, crop, source.HighRes);
                     success = true;
@@ -243,7 +251,7 @@ namespace WinEarth
         /// </summary>
         private static async Task DownloadFileAsync(string url, string filePath)
         {
-            using (HttpResponseMessage response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            using (HttpResponseMessage response = await GoesImage.HttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
                 using (Stream contentStream = await response.Content.ReadAsStreamAsync())
@@ -253,46 +261,30 @@ namespace WinEarth
                 }
             }
         }
-        private static string GetImageUrl(string html, int index)
+        private static void Crop(string filePath, Rectangle crop, bool hd_screen)
         {
-            return GoesImage.ExtractImageUrl(html, index);
-        }
-        public static void Crop(string filePath, Rectangle crop, bool hd_screen)
-        {
-            Bitmap b = new Bitmap(filePath);
-            using (Bitmap scaled_bitmap = new Bitmap(hd_screen ? 3840 : 1920, hd_screen ? 2160 : 1080))
+            int destWidth = hd_screen ? 3840 : 1920;
+            int destHeight = hd_screen ? 2160 : 1080;
+            using (Bitmap scaled_bitmap = new Bitmap(destWidth, destHeight))
             {
-                using (Bitmap cropped_bitmap = new Bitmap(crop.Width, crop.Height))
+                // Crop and scale in a single pass: copy the crop rectangle from the
+                // source straight into the full-size destination.
+                using (Bitmap source = new Bitmap(filePath))
+                using (Graphics g = Graphics.FromImage(scaled_bitmap))
+                using (var attrs = new ImageAttributes())
                 {
-                    using (Graphics g = Graphics.FromImage(cropped_bitmap))
-                    {
-                        g.CompositingMode = CompositingMode.SourceCopy;
-                        g.CompositingQuality = CompositingQuality.HighQuality;
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.SmoothingMode = SmoothingMode.HighQuality;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        using (var wrapMode = new ImageAttributes())
-                        {
-                            wrapMode.SetWrapMode(WrapMode.TileFlipXY);
-                            g.DrawImage(b, -crop.X, -crop.Y);
-                            b.Dispose();
-                        }
-                    }
-                    using (Graphics g = Graphics.FromImage(scaled_bitmap))
-                    {
-                        g.CompositingMode = CompositingMode.SourceCopy;
-                        g.CompositingQuality = CompositingQuality.HighQuality;
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.SmoothingMode = SmoothingMode.HighQuality;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        using (var wrapMode = new ImageAttributes())
-                        {
-                            wrapMode.SetWrapMode(WrapMode.TileFlipXY);
-                            g.DrawImage(cropped_bitmap, new Rectangle(0, 0, hd_screen ? 3840 : 1920, hd_screen ? 2160 : 1080), 0, 0, cropped_bitmap.Width, cropped_bitmap.Height, GraphicsUnit.Pixel, wrapMode);
-                            scaled_bitmap.Save(filePath, ImageFormat.Png);
-                        }
-                    }
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    g.CompositingQuality = CompositingQuality.HighQuality;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.SmoothingMode = SmoothingMode.HighQuality;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    // Avoid edge bleeding from neighboring pixels when sampling the crop.
+                    attrs.SetWrapMode(WrapMode.TileFlipXY);
+                    g.DrawImage(source, new Rectangle(0, 0, destWidth, destHeight), crop.X, crop.Y, crop.Width, crop.Height, GraphicsUnit.Pixel, attrs);
                 }
+                // source is now disposed, releasing its lock on filePath so we can
+                // overwrite it in place.
+                scaled_bitmap.Save(filePath, ImageFormat.Png);
             }
         }
     }

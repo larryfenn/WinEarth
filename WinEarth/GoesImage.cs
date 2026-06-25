@@ -17,7 +17,8 @@ namespace WinEarth
     public static class GoesImage
     {
         // HttpClient is thread-safe and meant to be reused for the life of the process.
-        private static readonly HttpClient httpClient = new HttpClient();
+        // Exposed so the background updater shares this single instance too.
+        internal static readonly HttpClient HttpClient = new HttpClient();
 
         /// <summary>
         /// NOAA's running list of available mesoscale views. A single page carries both
@@ -36,7 +37,7 @@ namespace WinEarth
         /// </summary>
         public static async Task<string> ResolveTopMesoscalePageAsync(bool west)
         {
-            string html = await httpClient.GetStringAsync(MesoIndexUrl);
+            string html = await HttpClient.GetStringAsync(MesoIndexUrl);
             return ExtractTopMesoscaleUrl(html, west);
         }
 
@@ -109,13 +110,13 @@ namespace WinEarth
         /// </summary>
         public static async Task<Bitmap> DownloadAsync(string pageUrl, int index)
         {
-            string html = await httpClient.GetStringAsync(pageUrl);
+            string html = await HttpClient.GetStringAsync(pageUrl);
             string href = ExtractImageUrl(html, index);
 
             // Pages may use absolute or page-relative hrefs; Uri resolution handles both.
             Uri imageUri = new Uri(new Uri(pageUrl), href);
 
-            using (HttpResponseMessage response = await httpClient.GetAsync(imageUri))
+            using (HttpResponseMessage response = await HttpClient.GetAsync(imageUri))
             {
                 response.EnsureSuccessStatusCode();
                 using (Stream stream = await response.Content.ReadAsStreamAsync())

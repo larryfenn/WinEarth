@@ -417,12 +417,6 @@ namespace WinEarth
             g.DrawRectangle(edge, r.X, r.Y, r.Width, r.Height);
         }
 
-        protected override void OnFormClosed(FormClosedEventArgs e)
-        {
-            base.OnFormClosed(e);
-            // The image is owned by the caller; do not dispose it here.
-        }
-
         private static float Clamp(float value, float min, float max)
         {
             if (value < min) return min;

@@ -361,3 +361,5 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# WinEarth runtime config (contains user-specific paths)
+WinEarth/config.json

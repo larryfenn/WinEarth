@@ -9,8 +9,9 @@ namespace WinEarth
     /// <summary>
     /// GUI shown when WinEarth is launched with <c>--config</c>. It enumerates the
     /// desktops (monitors) reported by the shell's <see cref="IDesktopWallpaper"/>
-    /// interface and presents one card per desktop. This is the foundation for the
-    /// upcoming preview mode (per-desktop source URL entry and crop selection).
+    /// interface and presents one card per desktop. Each card opens a
+    /// <see cref="DesktopEditorForm"/> for per-desktop source URL entry and crop
+    /// selection.
     /// </summary>
     public class ConfigForm : Form
     {
