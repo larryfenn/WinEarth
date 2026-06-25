@@ -2,13 +2,11 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Drawing;
 using System.Drawing.Imaging;
-using HtmlAgilityPack;
 using System.Drawing.Drawing2D;
 
 namespace WinEarth
@@ -109,9 +107,10 @@ namespace WinEarth
             while (true)
             {
                 // Per-monitor sources are picked in the --config GUI and persisted to
-                // config.json. Only fully-configured monitors (URL + crop) are updated.
+                // config.json. Standard monitors need a URL + crop; mesoscale monitors
+                // resolve their URL at update time, so they only need the (fixed) crop.
                 List<DesktopSource> sources = config.Sources
-                    .Where(s => s.HasCrop && !string.IsNullOrWhiteSpace(s.PageUrl))
+                    .Where(s => s.HasCrop && (s.IsMesoscale || !string.IsNullOrWhiteSpace(s.PageUrl)))
                     .ToList();
 
                 if (sources.Count == 0)
@@ -133,21 +132,10 @@ namespace WinEarth
                         continue;
                     }
 
-                    Uri pageUrl;
-                    try
-                    {
-                        pageUrl = new Uri(source.PageUrl);
-                    }
-                    catch (Exception e)
-                    {
-                        Log("Skipping monitor (bad URL)|" + source.PageUrl + "|" + e.Message);
-                        continue;
-                    }
-
                     // Stable per-monitor filename so concurrent updates don't collide.
                     string filename = "monitor_" + (uint)source.MonitorDevicePath.GetHashCode() + ".png";
                     Rectangle crop = new Rectangle(source.CropX, source.CropY, source.CropWidth, source.CropHeight);
-                    tasks.Add(DownloadImageFileAsync(pageUrl, source.ItemIndex, filename, crop, source.HighRes, screen));
+                    tasks.Add(DownloadImageFileAsync(source, filename, crop, screen));
                 }
 
                 try
@@ -167,10 +155,12 @@ namespace WinEarth
                 {
                     Log("Update cycle error|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
                 }
-                Thread.Sleep(300000);
+                // Mesoscale products refresh every minute; standard sectors every five.
+                // Use the faster cadence whenever any mesoscale monitor is configured.
+                Thread.Sleep(sources.Any(s => s.IsMesoscale) ? 60000 : 300000);
             }
         }
-        private static async Task DownloadImageFileAsync(Uri fullUrl, int index, string filename, Rectangle crop, bool highRes, Wallpaper screen)
+        private static async Task DownloadImageFileAsync(DesktopSource source, string filename, Rectangle crop, Wallpaper screen)
         {
             string filePath = Path.Combine(config.StoragePath, filename);
             bool success = false;
@@ -179,10 +169,13 @@ namespace WinEarth
             {
                 try
                 {
+                    // Resolving the page is inside the retry loop so a transient failure
+                    // reading NOAA's mesoscale list is retried like any other hiccup.
+                    Uri pageUrl = await ResolvePageUrlAsync(source);
                     // Resolve the scraped href against the page so relative links work too.
-                    string imageUrl = new Uri(fullUrl, GetImageUrl(await httpClient.GetStringAsync(fullUrl), index)).ToString();
+                    string imageUrl = new Uri(pageUrl, GetImageUrl(await httpClient.GetStringAsync(pageUrl), source.ItemIndex)).ToString();
                     await DownloadFileAsync(imageUrl, filePath);
-                    Crop(filePath, crop, highRes);
+                    Crop(filePath, crop, source.HighRes);
                     success = true;
                     screen.Set(filePath);
                 }
@@ -196,6 +189,22 @@ namespace WinEarth
             {
                 Log("Failed to update!");
             }
+        }
+
+        /// <summary>
+        /// Resolves the GOES page to scrape for a source. Standard sources use their
+        /// saved URL; mesoscale sources look up the top available view for their tab
+        /// from NOAA's running list each time, since those URLs are not fixed.
+        /// </summary>
+        private static async Task<Uri> ResolvePageUrlAsync(DesktopSource source)
+        {
+            if (source.IsMesoscale)
+            {
+                string page = await GoesImage.ResolveTopMesoscalePageAsync(
+                    source.Mode == DesktopSource.ModeMesoWest);
+                return new Uri(page);
+            }
+            return new Uri(source.PageUrl);
         }
 
         /// <summary>
@@ -217,16 +226,6 @@ namespace WinEarth
         private static string GetImageUrl(string html, int index)
         {
             return GoesImage.ExtractImageUrl(html, index);
-        }
-        private static async Task<string[]> GetMesoscaleUrl()
-        {
-            HtmlDocument htmlDoc = new HtmlDocument();
-            htmlDoc.LoadHtml(await httpClient.GetStringAsync("https://www.star.nesdis.noaa.gov/GOES/meso_index.php"));
-            var list = htmlDoc.DocumentNode.Descendants("div").Where(node => node.GetAttributeValue("class", "").Contains("MesoScroll")).ToList();
-            string[] results = new string[2];
-            results[0] = "https://www.star.nesdis.noaa.gov/GOES/" + WebUtility.HtmlDecode(list[0].Descendants("a").ToArray<HtmlNode>()[0].Attributes["href"].Value);
-            results[1] = "https://www.star.nesdis.noaa.gov/GOES/" + WebUtility.HtmlDecode(list[0].Descendants("a").ToArray<HtmlNode>()[1].Attributes["href"].Value);
-            return results;
         }
         public static void Crop(string filePath, Rectangle crop, bool hd_screen)
         {
