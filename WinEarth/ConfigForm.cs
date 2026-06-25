@@ -17,6 +17,12 @@ namespace WinEarth
         private readonly Config config;
         private FlowLayoutPanel layout;
 
+        /// <summary>
+        /// Set when the user closes the GUI via the "Run WinEarth" button, signalling
+        /// that the background updater should be started after the form closes.
+        /// </summary>
+        public bool LaunchRequested { get; private set; }
+
         public ConfigForm(Config config)
         {
             this.config = config;
@@ -49,8 +55,37 @@ namespace WinEarth
                 WrapContents = true,
             };
 
-            // Header is added last so it docks above the fill panel in z-order.
+            var runButton = new Button
+            {
+                Text = "Run WinEarth",
+                Width = 140,
+                Height = 32,
+                Anchor = AnchorStyles.Right,
+                FlatStyle = FlatStyle.System,
+            };
+            runButton.Click += (s, e) =>
+            {
+                // Closing with this flag set tells Program to start the background
+                // updater, just as if WinEarth had been launched without --config.
+                LaunchRequested = true;
+                Close();
+            };
+
+            var footer = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 48,
+                Padding = new Padding(16, 8, 16, 8),
+            };
+            runButton.Location = new Point(
+                footer.ClientSize.Width - runButton.Width - footer.Padding.Right,
+                footer.Padding.Top);
+            footer.Controls.Add(runButton);
+
+            // Header and footer are added after the fill panel so they dock to the
+            // edges above it in z-order.
             Controls.Add(layout);
+            Controls.Add(footer);
             Controls.Add(header);
 
             ReloadDesktops();

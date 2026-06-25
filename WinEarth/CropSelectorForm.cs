@@ -25,11 +25,27 @@ namespace WinEarth
         private readonly Label statusLabel;
         private readonly Button okButton;
 
+        // How close (in control pixels) the cursor must be to a corner to grab it.
+        private const float HandleHitRadius = 9f;
+
+        // Half-size (in control pixels) of the square handle markers drawn at corners.
+        private const float HandleDrawSize = 4f;
+
         // Selection in image-pixel coordinates. Empty until the user drags one out.
         private RectangleF selection;
 
-        private bool dragging;
+        // What part of the selection a press/drag is interacting with.
+        private enum Grip { None, Inside, TopLeft, TopRight, BottomLeft, BottomRight }
+
+        private enum DragMode { None, NewSelection, Move, Resize }
+
+        private DragMode dragMode = DragMode.None;
+
+        // For NewSelection and Resize: the fixed image-space corner the box grows from.
         private PointF dragAnchor;
+
+        // For Move: image-space offset between the cursor and the selection's top-left.
+        private PointF moveGrabOffset;
 
         /// <summary>The chosen crop in source-image pixels. Only meaningful on OK.</summary>
         public Rectangle Crop { get; private set; }
@@ -77,7 +93,7 @@ namespace WinEarth
                 Width = 520,
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = Color.DimGray,
-                Text = "Drag on the image to draw a 16:9 crop region.",
+                Text = "Drag to draw a 16:9 crop. Drag inside to move it, or a corner to resize.",
             };
 
             // Right-docked controls stack right-to-left in add order, so add Cancel
@@ -194,6 +210,56 @@ namespace WinEarth
             return new RectangleF(x, y, w, h);
         }
 
+        /// <summary>
+        /// Translates the selection so its top-left lands at <paramref name="newOrigin"/>,
+        /// clamping so the box stays fully inside the image (size unchanged).
+        /// </summary>
+        private RectangleF MoveSelection(PointF newOrigin)
+        {
+            float x = Clamp(newOrigin.X, 0, image.Width - selection.Width);
+            float y = Clamp(newOrigin.Y, 0, image.Height - selection.Height);
+            return new RectangleF(x, y, selection.Width, selection.Height);
+        }
+
+        /// <summary>Figures out which part of the selection (if any) sits under a control point.</summary>
+        private Grip HitTest(Point p)
+        {
+            if (selection.Width < 1)
+            {
+                return Grip.None;
+            }
+
+            RectangleF sel = ImageToControl(selection);
+            if (Near(p, sel.Left, sel.Top)) return Grip.TopLeft;
+            if (Near(p, sel.Right, sel.Top)) return Grip.TopRight;
+            if (Near(p, sel.Left, sel.Bottom)) return Grip.BottomLeft;
+            if (Near(p, sel.Right, sel.Bottom)) return Grip.BottomRight;
+            if (sel.Contains(p)) return Grip.Inside;
+            return Grip.None;
+        }
+
+        private static bool Near(Point p, float x, float y)
+        {
+            return Math.Abs(p.X - x) <= HandleHitRadius && Math.Abs(p.Y - y) <= HandleHitRadius;
+        }
+
+        private static Cursor CursorFor(Grip h)
+        {
+            switch (h)
+            {
+                case Grip.TopLeft:
+                case Grip.BottomRight:
+                    return Cursors.SizeNWSE;
+                case Grip.TopRight:
+                case Grip.BottomLeft:
+                    return Cursors.SizeNESW;
+                case Grip.Inside:
+                    return Cursors.SizeAll;
+                default:
+                    return Cursors.Cross;
+            }
+        }
+
         // --- Mouse handling ----------------------------------------------------------
 
         private void Canvas_MouseDown(object sender, MouseEventArgs e)
@@ -202,36 +268,82 @@ namespace WinEarth
             {
                 return;
             }
-            dragging = true;
-            dragAnchor = ControlToImage(e.Location);
-            selection = RectangleF.Empty;
+
+            PointF imagePt = ControlToImage(e.Location);
+            Grip hit = HitTest(e.Location);
+
+            switch (hit)
+            {
+                case Grip.TopLeft:
+                    dragMode = DragMode.Resize;
+                    dragAnchor = new PointF(selection.Right, selection.Bottom);
+                    break;
+                case Grip.TopRight:
+                    dragMode = DragMode.Resize;
+                    dragAnchor = new PointF(selection.Left, selection.Bottom);
+                    break;
+                case Grip.BottomLeft:
+                    dragMode = DragMode.Resize;
+                    dragAnchor = new PointF(selection.Right, selection.Top);
+                    break;
+                case Grip.BottomRight:
+                    dragMode = DragMode.Resize;
+                    dragAnchor = new PointF(selection.Left, selection.Top);
+                    break;
+                case Grip.Inside:
+                    dragMode = DragMode.Move;
+                    moveGrabOffset = new PointF(imagePt.X - selection.X, imagePt.Y - selection.Y);
+                    break;
+                default:
+                    dragMode = DragMode.NewSelection;
+                    dragAnchor = imagePt;
+                    selection = RectangleF.Empty;
+                    break;
+            }
+
             canvas.Invalidate();
         }
 
         private void Canvas_MouseMove(object sender, MouseEventArgs e)
         {
-            if (!dragging)
+            if (dragMode == DragMode.None)
             {
+                // Not dragging: reflect what the cursor is hovering over.
+                canvas.Cursor = CursorFor(HitTest(e.Location));
                 return;
             }
-            selection = BuildRatioRect(dragAnchor, ControlToImage(e.Location));
+
+            PointF imagePt = ControlToImage(e.Location);
+            switch (dragMode)
+            {
+                case DragMode.Move:
+                    selection = MoveSelection(new PointF(imagePt.X - moveGrabOffset.X, imagePt.Y - moveGrabOffset.Y));
+                    break;
+                case DragMode.NewSelection:
+                case DragMode.Resize:
+                    selection = BuildRatioRect(dragAnchor, imagePt);
+                    break;
+            }
+
             UpdateStatus();
             canvas.Invalidate();
         }
 
         private void Canvas_MouseUp(object sender, MouseEventArgs e)
         {
-            if (e.Button != MouseButtons.Left)
+            if (e.Button != MouseButtons.Left || dragMode == DragMode.None)
             {
                 return;
             }
-            dragging = false;
+
+            dragMode = DragMode.None;
             bool valid = selection.Width >= MinCropWidth;
             if (!valid)
             {
                 selection = RectangleF.Empty;
             }
             okButton.Enabled = valid;
+            canvas.Cursor = CursorFor(HitTest(e.Location));
             UpdateStatus();
             canvas.Invalidate();
         }
@@ -284,6 +396,25 @@ namespace WinEarth
             {
                 g.DrawRectangle(pen, sel.X, sel.Y, sel.Width, sel.Height);
             }
+
+            // Corner grab handles.
+            using (var fill = new SolidBrush(Color.White))
+            using (var edge = new Pen(Color.FromArgb(255, 80, 180, 255), 1.5f))
+            {
+                DrawHandle(g, fill, edge, sel.Left, sel.Top);
+                DrawHandle(g, fill, edge, sel.Right, sel.Top);
+                DrawHandle(g, fill, edge, sel.Left, sel.Bottom);
+                DrawHandle(g, fill, edge, sel.Right, sel.Bottom);
+            }
+        }
+
+        private static void DrawHandle(Graphics g, Brush fill, Pen edge, float cx, float cy)
+        {
+            var r = new RectangleF(
+                cx - HandleDrawSize, cy - HandleDrawSize,
+                HandleDrawSize * 2f, HandleDrawSize * 2f);
+            g.FillRectangle(fill, r);
+            g.DrawRectangle(edge, r.X, r.Y, r.Width, r.Height);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)

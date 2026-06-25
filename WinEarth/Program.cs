@@ -31,7 +31,15 @@ namespace WinEarth
             // instance mutex and can run alongside a running updater.
             if (args != null && args.Any(a => string.Equals(a, "--config", StringComparison.OrdinalIgnoreCase)))
             {
-                ShowConfig();
+                bool launchRequested = ShowConfig();
+
+                // The user clicked "Run WinEarth": spawn a fresh, detached instance with
+                // no args so it goes down the normal background-updater path (acquiring
+                // the single-instance mutex), then let this config process exit.
+                if (launchRequested)
+                {
+                    LaunchBackgroundInstance();
+                }
                 return;
             }
 
@@ -49,12 +57,42 @@ namespace WinEarth
             }
         }
 
-        /// <summary>Launches the configuration GUI and blocks until it is closed.</summary>
-        private static void ShowConfig()
+        /// <summary>
+        /// Launches the configuration GUI and blocks until it is closed. Returns
+        /// <c>true</c> if the user closed it via the "Run WinEarth" button.
+        /// </summary>
+        private static bool ShowConfig()
         {
             System.Windows.Forms.Application.EnableVisualStyles();
             System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
-            System.Windows.Forms.Application.Run(new ConfigForm(config));
+            using (ConfigForm form = new ConfigForm(config))
+            {
+                System.Windows.Forms.Application.Run(form);
+                return form.LaunchRequested;
+            }
+        }
+
+        /// <summary>
+        /// Starts a new, detached WinEarth process with no arguments so it runs the
+        /// background updater. The new process outlives this one, so closing the config
+        /// GUI leaves WinEarth running in the background.
+        /// </summary>
+        private static void LaunchBackgroundInstance()
+        {
+            try
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = System.Windows.Forms.Application.ExecutablePath,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                System.Diagnostics.Process.Start(startInfo);
+            }
+            catch (Exception e)
+            {
+                Log("Failed to launch background instance|" + e.GetType().Name + "|" + e.Message);
+            }
         }
 
         /// <summary>Appends a timestamped line to the configured log file.</summary>
