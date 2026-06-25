@@ -17,8 +17,19 @@ namespace WinEarth
     public static class GoesImage
     {
         // HttpClient is thread-safe and meant to be reused for the life of the process.
-        // Exposed so the background updater shares this single instance too.
-        internal static readonly HttpClient HttpClient = new HttpClient();
+        // Exposed so the background updater shares this single instance too. A
+        // User-Agent and a tighter timeout are set because NOAA may throttle or stall
+        // anonymous clients, and the default 100s timeout is far too long for a wallpaper
+        // that refreshes every minute.
+        internal static readonly HttpClient HttpClient = CreateHttpClient();
+
+        private static HttpClient CreateHttpClient()
+        {
+            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(
+                "WinEarth/1.0 (+https://github.com/larryfenn/WinEarth)");
+            return client;
+        }
 
         /// <summary>
         /// NOAA's running list of available mesoscale views. A single page carries both
@@ -72,7 +83,14 @@ namespace WinEarth
 
             // The list is sorted descending by use, so the first anchor is the one we want.
             // Hrefs are page-relative and may contain HTML-encoded ampersands.
-            string href = WebUtility.HtmlDecode(anchors[0].Attributes["href"].Value);
+            string rawHref = anchors[0].GetAttributeValue("href", null);
+            if (string.IsNullOrEmpty(rawHref))
+            {
+                throw new InvalidOperationException(
+                    "The top mesoscale view has no link target.");
+            }
+
+            string href = WebUtility.HtmlDecode(rawHref);
             return new Uri(new Uri(MesoIndexUrl), href).ToString();
         }
 
@@ -100,7 +118,14 @@ namespace WinEarth
                     string.Format("Item index {0} is out of range; the page has {1} link(s).", index, anchors.Length));
             }
 
-            return anchors[index].Attributes["href"].Value;
+            string href = anchors[index].GetAttributeValue("href", null);
+            if (string.IsNullOrEmpty(href))
+            {
+                throw new InvalidOperationException(
+                    string.Format("Link {0} on the page has no href.", index));
+            }
+
+            return href;
         }
 
         /// <summary>

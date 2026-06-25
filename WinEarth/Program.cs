@@ -82,6 +82,20 @@ namespace WinEarth
         /// </summary>
         private static void LaunchBackgroundInstance()
         {
+            // If an updater is already running, a new process would just lose the
+            // single-instance race and exit silently. The running instance reloads
+            // config every cycle (see Run), so it will pick up the just-saved settings
+            // within a minute — tell the user that instead of spawning a doomed process.
+            if (InstanceAlreadyRunning())
+            {
+                System.Windows.Forms.MessageBox.Show(
+                    "WinEarth is already running in the background. Your changes will take effect within a minute.",
+                    "WinEarth",
+                    System.Windows.Forms.MessageBoxButtons.OK,
+                    System.Windows.Forms.MessageBoxIcon.Information);
+                return;
+            }
+
             try
             {
                 var startInfo = new System.Diagnostics.ProcessStartInfo
@@ -98,16 +112,76 @@ namespace WinEarth
             }
         }
 
+        /// <summary>
+        /// Reports whether a background updater is already running, by probing for the
+        /// single-instance mutex without taking ownership. If the mutex can't be opened
+        /// for reasons other than non-existence (e.g. access denied), we conservatively
+        /// report "not running" and let the spawned process's own check arbitrate.
+        /// </summary>
+        private static bool InstanceAlreadyRunning()
+        {
+            try
+            {
+                using (Mutex.OpenExisting(@"Global\WinEarth-SingleInstance"))
+                {
+                    return true;
+                }
+            }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                return false;
+            }
+            catch (Exception e)
+            {
+                Log("Could not probe single-instance mutex|" + e.GetType().Name + "|" + e.Message);
+                return false;
+            }
+        }
+
+        // Cap the log at ~5 MB and keep a single rotated archive, so a long-running
+        // instance that keeps failing can't grow corelog.txt without bound.
+        private const long MaxLogBytes = 5 * 1024 * 1024;
+
         /// <summary>Appends a timestamped line to the configured log file.</summary>
         private static void Log(string message)
         {
             lock (logLock)
             {
+                try
+                {
+                    RotateLogIfNeeded();
+                }
+                catch
+                {
+                    // Rotation is best-effort; never let it block the actual write.
+                }
+
                 using (StreamWriter sw = File.AppendText(Config.LogPath))
                 {
                     sw.WriteLine(DateTime.Now + "|" + message);
                 }
             }
+        }
+
+        /// <summary>
+        /// Rolls the log over to a single ".1" archive once it exceeds
+        /// <see cref="MaxLogBytes"/>, replacing any previous archive. Caps total log
+        /// footprint at roughly twice the limit. Caller holds <see cref="logLock"/>.
+        /// </summary>
+        private static void RotateLogIfNeeded()
+        {
+            FileInfo info = new FileInfo(Config.LogPath);
+            if (!info.Exists || info.Length <= MaxLogBytes)
+            {
+                return;
+            }
+
+            string archive = Config.LogPath + ".1";
+            if (File.Exists(archive))
+            {
+                File.Delete(archive);
+            }
+            File.Move(Config.LogPath, archive);
         }
 
         private static void Run()
@@ -120,6 +194,15 @@ namespace WinEarth
             bool firstPass = true;
             while (true)
             {
+                // Pick up edits made through --config while this updater is running.
+                // Reload returns null (and we keep the last-known-good config) if the
+                // file is briefly unreadable, e.g. mid-write from the config GUI.
+                Config reloaded = Config.Reload();
+                if (reloaded != null)
+                {
+                    config = reloaded;
+                }
+
                 bool standardDue = firstPass || DateTime.Now.Minute % 5 == 2;
 
                 // Per-monitor sources are picked in the --config GUI and persisted to
@@ -141,6 +224,7 @@ namespace WinEarth
                     .ToList();
 
                 List<Task> tasks = new List<Task>();
+                List<UpdateResult> results = new List<UpdateResult>();
                 foreach (DesktopSource source in due)
                 {
                     Wallpaper screen;
@@ -155,19 +239,27 @@ namespace WinEarth
                     }
 
                     // Stable per-monitor filename so concurrent updates don't collide.
-                    string filename = "monitor_" + (uint)source.MonitorDevicePath.GetHashCode() + ".png";
+                    string filename = "monitor_" + StableHash(source.MonitorDevicePath) + ".png";
                     Rectangle crop = new Rectangle(source.CropX, source.CropY, source.CropWidth, source.CropHeight);
-                    tasks.Add(DownloadImageFileAsync(source, filename, crop, screen));
+                    UpdateResult result = new UpdateResult { Screen = screen };
+                    results.Add(result);
+                    tasks.Add(DownloadImageFileAsync(source, filename, crop, result));
                 }
 
+                // Blocking the STA Main thread here is safe only because the updater path
+                // never installs a SynchronizationContext (no Application.Run), so the
+                // awaited continuations inside the tasks resume on the thread pool rather
+                // than trying to marshal back to this now-blocked thread. Do not add a
+                // sync-context-bound await to this path or .Wait() can deadlock.
                 try
                 {
                     Task.WhenAll(tasks).Wait();
                 }
                 catch (AggregateException ae)
                 {
-                    // Per-task failures are already logged inside DownloadImageFileAsync;
-                    // this is a safety net for anything that still escapes.
+                    // Each task body swallows and logs its own failures, so today nothing
+                    // faults the combined task. These handlers are a safety net that only
+                    // fires if a future change lets an exception escape a task body.
                     foreach (Exception e in ae.Flatten().InnerExceptions)
                     {
                         Log("Update cycle error|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
@@ -176,6 +268,29 @@ namespace WinEarth
                 catch (Exception e)
                 {
                     Log("Update cycle error|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
+                }
+
+                // Apply the wallpapers here, on the STA Main thread. SetWallpaper is an
+                // apartment-threaded shell COM call; invoking it from the MTA download
+                // threads relies on COM marshaling and can throw COMException /
+                // InvalidCastException. Each Wallpaper RCW is released once it's used.
+                foreach (UpdateResult result in results)
+                {
+                    try
+                    {
+                        if (result.Downloaded)
+                        {
+                            result.Screen.Set(result.FilePath);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Log("Failed to set wallpaper|" + e.GetType().Name + "|" + e.Message);
+                    }
+                    finally
+                    {
+                        result.Screen.Dispose();
+                    }
                 }
 
                 firstPass = false;
@@ -198,12 +313,11 @@ namespace WinEarth
                 Thread.Sleep(delay);
             }
         }
-        private static async Task DownloadImageFileAsync(DesktopSource source, string filename, Rectangle crop, Wallpaper screen)
+        private static async Task DownloadImageFileAsync(DesktopSource source, string filename, Rectangle crop, UpdateResult result)
         {
             string filePath = Path.Combine(Config.StoragePath, filename);
-            bool success = false;
             int retries = 0;
-            while (!success && retries < 3)
+            while (retries < 3)
             {
                 try
                 {
@@ -214,18 +328,55 @@ namespace WinEarth
                     string imageUrl = new Uri(pageUrl, GoesImage.ExtractImageUrl(await GoesImage.HttpClient.GetStringAsync(pageUrl), source.ItemIndex)).ToString();
                     await DownloadFileAsync(imageUrl, filePath);
                     Crop(filePath, crop, source.HighRes);
-                    success = true;
-                    screen.Set(filePath);
+                    // The COM SetWallpaper is deferred to the STA Main thread (see Run),
+                    // so success here means the image is downloaded and ready to apply.
+                    result.FilePath = filePath;
+                    result.Downloaded = true;
+                    return;
                 }
                 catch (Exception e)
                 {
                     retries++;
                     Log(e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
+
+                    // Back off before retrying so a transient NOAA failure isn't hammered.
+                    if (retries < 3)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(2 * retries));
+                    }
                 }
             }
-            if (!success)
+            Log("Failed to update!");
+        }
+
+        /// <summary>
+        /// Carries one monitor's update from the concurrent download stage to the
+        /// STA-thread apply stage: the COM <see cref="Wallpaper"/> handle plus, once the
+        /// image is downloaded and cropped, the file to set.
+        /// </summary>
+        private sealed class UpdateResult
+        {
+            public Wallpaper Screen;
+            public string FilePath;
+            public bool Downloaded;
+        }
+
+        /// <summary>
+        /// Runtime-independent FNV-1a hash, used for the per-monitor cache filename.
+        /// <see cref="string.GetHashCode"/> is not stable across processes if randomized
+        /// string hashing is ever enabled, which would orphan the per-monitor PNGs.
+        /// </summary>
+        private static uint StableHash(string text)
+        {
+            unchecked
             {
-                Log("Failed to update!");
+                uint hash = 2166136261; // FNV-1a 32-bit offset basis
+                foreach (char c in text)
+                {
+                    hash ^= c;
+                    hash *= 16777619; // FNV-1a 32-bit prime
+                }
+                return hash;
             }
         }
 

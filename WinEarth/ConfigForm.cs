@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace WinEarth
@@ -96,6 +97,15 @@ namespace WinEarth
         private void ReloadDesktops()
         {
             layout.SuspendLayout();
+            // Dispose the previous cards (and their decoded thumbnail bitmaps) before
+            // dropping them: clearing the panel alone leaks one GDI bitmap per monitor
+            // on every reconfigure, because Control.Dispose doesn't free PictureBox.Image.
+            // Snapshot first: Control.Dispose removes the card from layout.Controls, so
+            // iterating the live collection would skip cards (or throw).
+            foreach (Control card in layout.Controls.Cast<Control>().ToArray())
+            {
+                DisposeCard(card);
+            }
             layout.Controls.Clear();
             try
             {
@@ -277,6 +287,24 @@ namespace WinEarth
                 source.CropHeight,
                 source.ItemIndex,
                 source.HighRes ? " · 4K" : string.Empty);
+        }
+
+        /// <summary>
+        /// Disposes a desktop card and any thumbnail bitmaps its PictureBoxes hold.
+        /// PictureBox.Dispose does not free its Image, so the bitmap is released
+        /// explicitly to avoid a GDI leak on each <see cref="ReloadDesktops"/>.
+        /// </summary>
+        private static void DisposeCard(Control card)
+        {
+            foreach (Control child in card.Controls)
+            {
+                if (child is PictureBox pictureBox && pictureBox.Image != null)
+                {
+                    pictureBox.Image.Dispose();
+                    pictureBox.Image = null;
+                }
+            }
+            card.Dispose();
         }
 
         /// <summary>

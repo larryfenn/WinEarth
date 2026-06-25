@@ -134,6 +134,13 @@ namespace WinEarth
                     Config loaded = new JavaScriptSerializer().Deserialize<Config>(json);
                     if (loaded != null)
                     {
+                        // A file containing {"Sources":null} parses fine but leaves the
+                        // list null, overriding the field initializer; downstream code
+                        // iterates Sources unconditionally, so normalize it here.
+                        if (loaded.Sources == null)
+                        {
+                            loaded.Sources = new List<DesktopSource>();
+                        }
                         return loaded;
                     }
                 }
@@ -153,6 +160,40 @@ namespace WinEarth
                 // If we can't write the file, just run with in-memory defaults.
             }
             return defaults;
+        }
+
+        /// <summary>
+        /// Re-reads config.json from disk, returning the parsed config or <c>null</c> if
+        /// the file is missing or cannot be read/parsed. Unlike <see cref="Load"/> this
+        /// neither writes a defaults file nor substitutes an empty config, so the running
+        /// updater can keep using its last-known-good config when a reload fails (for
+        /// example a partial write racing the read).
+        /// </summary>
+        public static Config Reload()
+        {
+            try
+            {
+                if (!File.Exists(ConfigFilePath))
+                {
+                    return null;
+                }
+
+                string json = File.ReadAllText(ConfigFilePath);
+                Config loaded = new JavaScriptSerializer().Deserialize<Config>(json);
+                if (loaded == null)
+                {
+                    return null;
+                }
+                if (loaded.Sources == null)
+                {
+                    loaded.Sources = new List<DesktopSource>();
+                }
+                return loaded;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         /// <summary>
