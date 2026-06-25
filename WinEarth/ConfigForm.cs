@@ -15,6 +15,7 @@ namespace WinEarth
     public class ConfigForm : Form
     {
         private readonly Config config;
+        private FlowLayoutPanel layout;
 
         public ConfigForm(Config config)
         {
@@ -39,7 +40,7 @@ namespace WinEarth
                 Font = new Font("Segoe UI", 14f, FontStyle.Bold),
             };
 
-            var layout = new FlowLayoutPanel
+            layout = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
@@ -52,6 +53,14 @@ namespace WinEarth
             Controls.Add(layout);
             Controls.Add(header);
 
+            ReloadDesktops();
+        }
+
+        /// <summary>Rebuilds the desktop cards from the current shell + config state.</summary>
+        private void ReloadDesktops()
+        {
+            layout.SuspendLayout();
+            layout.Controls.Clear();
             try
             {
                 foreach (DesktopInfo desktop in EnumerateDesktops())
@@ -67,6 +76,22 @@ namespace WinEarth
                     ForeColor = Color.Firebrick,
                     Text = "Could not enumerate desktops:" + Environment.NewLine + e.Message,
                 });
+            }
+            finally
+            {
+                layout.ResumeLayout();
+            }
+        }
+
+        /// <summary>Opens the per-desktop editor and refreshes the cards if it applied.</summary>
+        private void OpenEditor(DesktopInfo desktop)
+        {
+            using (var editor = new DesktopEditorForm(config, desktop.DevicePath, (int)desktop.Index + 1))
+            {
+                if (editor.ShowDialog(this) == DialogResult.OK)
+                {
+                    ReloadDesktops();
+                }
             }
         }
 
@@ -116,15 +141,16 @@ namespace WinEarth
             }
         }
 
-        private static Control CreateDesktopCard(DesktopInfo desktop)
+        private Control CreateDesktopCard(DesktopInfo desktop)
         {
             var card = new Panel
             {
                 Width = 240,
-                Height = 220,
+                Height = 256,
                 Margin = new Padding(8),
                 BorderStyle = BorderStyle.FixedSingle,
                 BackColor = Color.White,
+                Cursor = Cursors.Hand,
             };
 
             var preview = new PictureBox
@@ -134,6 +160,7 @@ namespace WinEarth
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.FromArgb(24, 24, 24),
                 Image = LoadThumbnail(desktop.WallpaperPath),
+                Cursor = Cursors.Hand,
             };
 
             int width = desktop.Bounds.Right - desktop.Bounds.Left;
@@ -156,19 +183,57 @@ namespace WinEarth
                 Dock = DockStyle.Fill,
                 Padding = new Padding(8, 0, 8, 4),
                 ForeColor = Color.DimGray,
-                Text = string.Format(
-                    "{0}{1}Position: ({2}, {3})",
-                    resolution,
-                    Environment.NewLine,
-                    desktop.Bounds.Left,
-                    desktop.Bounds.Top),
+                Text = DescribeSource(desktop, resolution),
             };
+
+            var configureButton = new Button
+            {
+                Dock = DockStyle.Bottom,
+                Height = 32,
+                Text = "Configure…",
+                FlatStyle = FlatStyle.System,
+            };
+            configureButton.Click += (s, e) => OpenEditor(desktop);
+
+            // Clicking anywhere on the card (image, title, details) also opens the editor.
+            EventHandler open = (s, e) => OpenEditor(desktop);
+            card.Click += open;
+            preview.Click += open;
+            title.Click += open;
+            details.Click += open;
 
             // Docked controls are added inner-most first so they stack correctly.
             card.Controls.Add(details);
+            card.Controls.Add(configureButton);
             card.Controls.Add(title);
             card.Controls.Add(preview);
             return card;
+        }
+
+        /// <summary>Builds the card's detail text, including any configured GOES source.</summary>
+        private string DescribeSource(DesktopInfo desktop, string resolution)
+        {
+            DesktopSource source = config.FindSource(desktop.DevicePath);
+            string baseLine = string.Format(
+                "{0}{1}Position: ({2}, {3})",
+                resolution,
+                Environment.NewLine,
+                desktop.Bounds.Left,
+                desktop.Bounds.Top);
+
+            if (source == null || !source.HasCrop)
+            {
+                return baseLine + Environment.NewLine + "Source: not configured";
+            }
+
+            return string.Format(
+                "{0}{1}Crop: {2} × {3} (item {4}){5}",
+                baseLine,
+                Environment.NewLine,
+                source.CropWidth,
+                source.CropHeight,
+                source.ItemIndex,
+                source.HighRes ? " · 4K" : string.Empty);
         }
 
         /// <summary>

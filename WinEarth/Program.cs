@@ -68,25 +68,50 @@ namespace WinEarth
 
         private static void Run()
         {
-            Wallpaper[] screens = { new Wallpaper(1), new Wallpaper(2), new Wallpaper(0) }; // order comes from the monitor order in Displays
-            string[] filenames = { "left.png", "center.png", "right.png" };
-            Rectangle[] crops = { new Rectangle(2600, 94, 2400, 1350), new Rectangle(0, 132, 3317, 1866), new Rectangle(0, 0, 4676, 2630) };
             while (true)
             {
-                List<Task> tasks = new List<Task>();
-                // string[] meso_pages = await GetMesoscaleUrl();
-                Uri[] page_urls = {
-                    new Uri("https://www.star.nesdis.noaa.gov/goes/conus.php?sat=G18"),
-                    new Uri("https://www.star.nesdis.noaa.gov/GOES/sector.php?sat=G16&sector=eus"),
-                    // new Uri(meso_pages[0]),
-                    // new Uri(meso_pages[1]),
-                    new Uri("https://www.star.nesdis.noaa.gov/GOES/conus.php?sat=G16")
-                };
-                int[] page_item_indices = { 6, 6, 6 };
-                for (int i = 0; i < 3; i++)
+                // Per-monitor sources are picked in the --config GUI and persisted to
+                // config.json. Only fully-configured monitors (URL + crop) are updated.
+                List<DesktopSource> sources = config.Sources
+                    .Where(s => s.HasCrop && !string.IsNullOrWhiteSpace(s.PageUrl))
+                    .ToList();
+
+                if (sources.Count == 0)
                 {
-                    tasks.Add(DownloadImageFileAsync(i, page_urls[i], page_item_indices[i], filenames[i], crops[i], screens[i]));
+                    Log("No desktop sources configured. Run WinEarth --config to set up monitors.");
                 }
+
+                List<Task> tasks = new List<Task>();
+                foreach (DesktopSource source in sources)
+                {
+                    Wallpaper screen;
+                    try
+                    {
+                        screen = new Wallpaper(source.MonitorDevicePath);
+                    }
+                    catch (Exception e)
+                    {
+                        Log("Skipping monitor (unavailable)|" + source.MonitorDevicePath + "|" + e.Message);
+                        continue;
+                    }
+
+                    Uri pageUrl;
+                    try
+                    {
+                        pageUrl = new Uri(source.PageUrl);
+                    }
+                    catch (Exception e)
+                    {
+                        Log("Skipping monitor (bad URL)|" + source.PageUrl + "|" + e.Message);
+                        continue;
+                    }
+
+                    // Stable per-monitor filename so concurrent updates don't collide.
+                    string filename = "monitor_" + (uint)source.MonitorDevicePath.GetHashCode() + ".png";
+                    Rectangle crop = new Rectangle(source.CropX, source.CropY, source.CropWidth, source.CropHeight);
+                    tasks.Add(DownloadImageFileAsync(pageUrl, source.ItemIndex, filename, crop, source.HighRes, screen));
+                }
+
                 try
                 {
                     Task.WhenAll(tasks).Wait();
@@ -107,7 +132,7 @@ namespace WinEarth
                 Thread.Sleep(300000);
             }
         }
-        private static async Task DownloadImageFileAsync(int task_id, Uri fullUrl, int index, string filename, Rectangle crop, Wallpaper screen)
+        private static async Task DownloadImageFileAsync(Uri fullUrl, int index, string filename, Rectangle crop, bool highRes, Wallpaper screen)
         {
             string filePath = Path.Combine(config.StoragePath, filename);
             bool success = false;
@@ -116,9 +141,10 @@ namespace WinEarth
             {
                 try
                 {
-                    string imageUrl = GetImageUrl(await httpClient.GetStringAsync(fullUrl), index);
+                    // Resolve the scraped href against the page so relative links work too.
+                    string imageUrl = new Uri(fullUrl, GetImageUrl(await httpClient.GetStringAsync(fullUrl), index)).ToString();
                     await DownloadFileAsync(imageUrl, filePath);
-                    Crop(filePath, crop, task_id == 2); // the 2 means we're doing the rightmost monitor, which is 4K
+                    Crop(filePath, crop, highRes);
                     success = true;
                     screen.Set(filePath);
                 }
@@ -152,10 +178,7 @@ namespace WinEarth
         }
         private static string GetImageUrl(string html, int index)
         {
-            HtmlDocument htmlDoc = new HtmlDocument();
-            htmlDoc.LoadHtml(html);
-            var table = htmlDoc.DocumentNode.Descendants("div").Where(node => node.GetAttributeValue("class", "").Contains("Links")).ToList();
-            return table[0].Descendants("a").ToArray<HtmlNode>()[index].Attributes["href"].Value;
+            return GoesImage.ExtractImageUrl(html, index);
         }
         private static async Task<string[]> GetMesoscaleUrl()
         {
