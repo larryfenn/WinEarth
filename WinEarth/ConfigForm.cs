@@ -261,6 +261,13 @@ namespace WinEarth
                 return baseLine + Environment.NewLine + "Source: not configured";
             }
 
+            if (source.IsMesoscale)
+            {
+                return baseLine + Environment.NewLine + string.Format(
+                    "Source: Mesoscale {0}",
+                    source.Mode == DesktopSource.ModeMesoEast ? "East" : "West");
+            }
+
             return string.Format(
                 "{0}{1}Crop: {2} × {3} (item {4}){5}",
                 baseLine,

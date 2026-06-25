@@ -15,8 +15,26 @@ namespace WinEarth
     /// </summary>
     public class DesktopSource
     {
+        /// <summary>Standard view: a fixed page URL plus a user-chosen crop.</summary>
+        public const string ModeStandard = "Standard";
+
+        /// <summary>GOES-East mesoscale view: scraped from NOAA's running meso list.</summary>
+        public const string ModeMesoEast = "MesoEast";
+
+        /// <summary>GOES-West mesoscale view: scraped from NOAA's running meso list.</summary>
+        public const string ModeMesoWest = "MesoWest";
+
         /// <summary>Stable shell identifier for the target monitor.</summary>
         public string MonitorDevicePath { get; set; }
+
+        /// <summary>
+        /// View mode for this desktop: <see cref="ModeStandard"/>, <see cref="ModeMesoEast"/>,
+        /// or <see cref="ModeMesoWest"/>. Mesoscale modes ignore <see cref="PageUrl"/> and
+        /// instead resolve the top available mesoscale product from NOAA's running list,
+        /// updating every minute. Null/empty is treated as <see cref="ModeStandard"/> so
+        /// configs written before this field existed keep working.
+        /// </summary>
+        public string Mode { get; set; }
 
         /// <summary>GOES page to scrape for the image link (e.g. a conus/sector php page).</summary>
         public string PageUrl { get; set; }
@@ -40,6 +58,12 @@ namespace WinEarth
         public bool HasCrop
         {
             get { return CropWidth > 0 && CropHeight > 0; }
+        }
+
+        /// <summary>True when this desktop tracks a mesoscale view (East or West).</summary>
+        public bool IsMesoscale
+        {
+            get { return Mode == ModeMesoEast || Mode == ModeMesoWest; }
         }
     }
 
