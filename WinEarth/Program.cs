@@ -104,22 +104,36 @@ namespace WinEarth
 
         private static void Run()
         {
+            // The loop wakes on each wall-clock minute boundary. Mesoscale monitors
+            // refresh every minute; standard sectors refresh only on minutes ending in
+            // 2 or 7 (minute % 5 == 2), a couple of minutes after NOAA posts each new
+            // 5-minute image. The first pass updates everything so a freshly launched
+            // WinEarth fills its wallpapers immediately instead of waiting for the slot.
+            bool firstPass = true;
             while (true)
             {
+                bool standardDue = firstPass || DateTime.Now.Minute % 5 == 2;
+
                 // Per-monitor sources are picked in the --config GUI and persisted to
                 // config.json. Standard monitors need a URL + crop; mesoscale monitors
                 // resolve their URL at update time, so they only need the (fixed) crop.
-                List<DesktopSource> sources = config.Sources
+                List<DesktopSource> configured = config.Sources
                     .Where(s => s.HasCrop && (s.IsMesoscale || !string.IsNullOrWhiteSpace(s.PageUrl)))
                     .ToList();
 
-                if (sources.Count == 0)
+                // Gate the "nothing configured" hint behind the standard slot so it keeps
+                // its old ~5-minute cadence instead of repeating every single minute.
+                if (configured.Count == 0 && standardDue)
                 {
                     Log("No desktop sources configured. Run WinEarth --config to set up monitors.");
                 }
 
+                List<DesktopSource> due = configured
+                    .Where(s => s.IsMesoscale || standardDue)
+                    .ToList();
+
                 List<Task> tasks = new List<Task>();
-                foreach (DesktopSource source in sources)
+                foreach (DesktopSource source in due)
                 {
                     Wallpaper screen;
                     try
@@ -155,9 +169,25 @@ namespace WinEarth
                 {
                     Log("Update cycle error|" + e.GetType().Name + "|" + e.Message + "|" + e.StackTrace);
                 }
-                // Mesoscale products refresh every minute; standard sectors every five.
-                // Use the faster cadence whenever any mesoscale monitor is configured.
-                Thread.Sleep(sources.Any(s => s.IsMesoscale) ? 60000 : 300000);
+
+                firstPass = false;
+                SleepUntilNextMinute();
+            }
+        }
+
+        /// <summary>
+        /// Blocks until the next wall-clock minute boundary so updates land on the
+        /// minute ("sharp"). A download cycle that overruns a minute simply realigns to
+        /// the following boundary on the next pass.
+        /// </summary>
+        private static void SleepUntilNextMinute()
+        {
+            DateTime now = DateTime.Now;
+            DateTime nextMinute = now.AddMinutes(1).AddSeconds(-now.Second).AddMilliseconds(-now.Millisecond);
+            TimeSpan delay = nextMinute - now;
+            if (delay > TimeSpan.Zero)
+            {
+                Thread.Sleep(delay);
             }
         }
         private static async Task DownloadImageFileAsync(DesktopSource source, string filename, Rectangle crop, Wallpaper screen)
